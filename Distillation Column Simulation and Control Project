@@ -1,0 +1,109 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import odeint
+import ipywidgets as wg
+from IPython.display import display
+
+# define model
+def distill(x, t, rr, Feed, x_Feed):
+    D = 0.5 * Feed
+    L = rr * D
+    V = L + D
+    FL = Feed + L
+    vol = 1.6
+    atray = 0.25
+    acond = 0.5
+    areb = 1.0
+    y = np.empty(len(x))
+    for i in range(32):
+        y[i] = x[i] * vol / (1.0 + (vol - 1.0) * x[i])
+    xdot = np.empty(len(x))
+    xdot[0] = 1 / acond * V * (y[1] - x[0])
+    for i in range(1, 16):
+        xdot[i] = 1.0 / atray * (L * (x[i - 1] - x[i]) - V * (y[i] - y[i + 1]))
+    xdot[16] = 1 / atray * (Feed * x_Feed + L * x[15] - FL * x[16] - V * (y[16] - y[17]))
+    for i in range(17, 31):
+        xdot[i] = 1.0 / atray * (FL * (x[i - 1] - x[i]) - V * (y[i] - y[i + 1]))
+    xdot[31] = 1 / areb * (FL * x[30] - (Feed - D) * x[31] - V * y[31])
+    return xdot
+
+def simulate_distillation(Kc, tauI, tauD, rr_step, Feed_step, x_Feed_step):
+    # Steady State Initial Conditions for the 32 states
+    x_ss = np.array([0.935, 0.900, 0.862, 0.821, 0.779, 0.738,
+                     0.698, 0.661, 0.628, 0.599, 0.574, 0.553, 0.535, 0.521,
+                     0.510, 0.501, 0.494, 0.485, 0.474, 0.459, 0.441, 0.419,
+                     0.392, 0.360, 0.324, 0.284, 0.243, 0.201, 0.161, 0.125,
+                     0.092, 0.064])
+    x0 = x_ss
+    rr_ss = 3.0
+    ns = 101
+    t = np.linspace(0, 100, ns)
+    xd = np.ones(len(t)) * x_ss[0]
+    rr = np.ones(len(t)) * rr_ss
+    ff = np.ones(len(t))
+    xf = np.ones(len(t)) * 0.5
+    rr[10:] = rr_step
+    ff[10:] = Feed_step
+    xf[10:] = x_Feed_step
+    delta_t = t[1] - t[0]
+    op = np.ones(ns) * 3.0
+    pv = np.zeros(ns)
+    e = np.zeros(ns)
+    ie = np.zeros(ns)
+    dpv = np.zeros(ns)
+    P = np.zeros(ns)
+    I = np.zeros(ns)
+    D = np.zeros(ns)
+    sp = np.ones(ns) * 0.935
+    sp[10:] = 0.97
+    op_hi = 10.0
+    op_lo = 1.0
+    for i in range(1, ns):
+        e[i] = sp[i] - pv[i]
+        if i >= 1:
+            dpv[i] = (pv[i] - pv[i - 1]) / delta_t
+            ie[i] = ie[i - 1] + e[i] * delta_t
+        P[i] = Kc * e[i]
+        I[i] = Kc / tauI * ie[i]
+        D[i] = - Kc * tauD * dpv[i]
+        op[i] = op[0] + P[i] + I[i] + D[i]
+        if op[i] > op_hi:
+            op[i] = op_hi
+            ie[i] = ie[i] - e[i] * delta_t
+        if op[i] < op_lo:
+            op[i] = op_lo
+            ie[i] = ie[i] - e[i] * delta_t
+        rr[i] = op[i]
+        ts = [t[i - 1], t[i]]
+        y = odeint(distill, x0, ts, args=(rr[i], ff[i], xf[i]))
+        xd[i] = y[-1][0]
+        x0 = y[-1]
+        if i < ns - 1:
+            pv[i + 1] = y[-1][0]
+    plt.figure()
+    plt.subplot(3, 1, 1)
+    plt.plot(t, rr, 'b--', linewidth=3)
+    plt.ylabel(r'$RR$')
+    plt.legend(['Reflux ratio'], loc='best')
+    plt.subplot(3, 1, 2)
+    plt.plot(t, xf, 'k:', linewidth=3, label='Feed composition')
+    plt.plot(t, ff, 'g-.', linewidth=3, label='Feed flow (mol/min)')
+    plt.ylabel('Feed')
+    plt.ylim([0.4, 1.1])
+    plt.legend(loc='best')
+    plt.subplot(3, 1, 3)
+    plt.plot(t, xd, 'r-', linewidth=3)
+    plt.plot(t, sp, 'k.-', linewidth=1)
+    plt.ylabel(r'$x_d\;(mol/L)$')
+    plt.legend(['Distillate composition', 'Set point'], loc='best')
+    plt.xlabel('Time (min)')
+    plt.show()
+
+Kc_slider = wg.FloatSlider(value=60, min=0, max=200, step=1, description='Kc')
+tauI_slider = wg.FloatSlider(value=4, min=0.01, max=10, step=0.01, description='tauI')
+tauD_slider = wg.FloatSlider(value=0, min=0, max=2, step=0.01, description='tauD')
+rr_slider = wg.FloatSlider(value=3.0, min=1.0, max=10.0, step=0.1, description='Reflux Ratio')
+Feed_slider = wg.FloatSlider(value=1.0, min=0.1, max=2.0, step=0.1, description='Feed Flow (mol/min)')
+x_Feed_slider = wg.FloatSlider(value=0.5, min=0.1, max=0.9, step=0.01, description='Feed Composition')
+
+wg.interact(simulate_distillation, Kc=Kc_slider, tauI=tauI_slider, tauD=tauD_slider, rr_step=rr_slider, Feed_step=Feed_slider, x_Feed_step=x_Feed_slider)
